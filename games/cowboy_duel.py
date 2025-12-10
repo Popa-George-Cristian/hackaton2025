@@ -22,26 +22,94 @@ mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 
 
+def finger_extended(wrist, mcp, pip, tip):
+    """
+    Determina daca un deget este intins sau nu.
+    Criteriu simplu: distanta WRIST -> TIP trebuie sa fie clar mai mare
+    decat distanta WRIST -> PIP.
+    """
+    def dist(a, b):
+        return math.sqrt(
+            (a.x - b.x) ** 2 +
+            (a.y - b.y) ** 2 +
+            (a.z - b.z) ** 2
+        )
+
+    d_tip = dist(wrist, tip)
+    d_pip = dist(wrist, pip)
+
+    return d_tip > d_pip * 1.25  # factor ajustabil
+
+
+def is_pistol_pose(hand_landmarks):
+    """
+    Verifica daca mana este in forma de pistol:
+    - index intins
+    - middle, ring, pinky NU sunt intinse
+    - degetul aratator este aproximativ orizontal (spre stanga/dreapta)
+    """
+    lm = hand_landmarks.landmark
+
+    wrist = lm[mp_hands.HandLandmark.WRIST]
+
+    index_mcp = lm[mp_hands.HandLandmark.INDEX_FINGER_MCP]
+    index_pip = lm[mp_hands.HandLandmark.INDEX_FINGER_PIP]
+    index_tip = lm[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+
+    middle_mcp = lm[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
+    middle_pip = lm[mp_hands.HandLandmark.MIDDLE_FINGER_PIP]
+    middle_tip = lm[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+
+    ring_mcp = lm[mp_hands.HandLandmark.RING_FINGER_MCP]
+    ring_pip = lm[mp_hands.HandLandmark.RING_FINGER_PIP]
+    ring_tip = lm[mp_hands.HandLandmark.RING_FINGER_TIP]
+
+    pinky_mcp = lm[mp_hands.HandLandmark.PINKY_MCP]
+    pinky_pip = lm[mp_hands.HandLandmark.PINKY_PIP]
+    pinky_tip = lm[mp_hands.HandLandmark.PINKY_TIP]
+
+    index_ext = finger_extended(wrist, index_mcp, index_pip, index_tip)
+    middle_ext = finger_extended(wrist, middle_mcp, middle_pip, middle_tip)
+    ring_ext = finger_extended(wrist, ring_mcp, ring_pip, ring_tip)
+    pinky_ext = finger_extended(wrist, pinky_mcp, pinky_pip, pinky_tip)
+
+    # Index intins, celelalte stranse
+    pistol_shape = index_ext and not (middle_ext or ring_ext or pinky_ext)
+
+    # Orientarea degetului aratator: orizontal (spre stanga/dreapta)
+    vx = index_tip.x - index_mcp.x
+    vy = index_tip.y - index_mcp.y
+    angle_deg = math.degrees(math.atan2(vy, vx))
+    # vrem aproape 0 sau 180 grade (orizontal)
+    # ex: 0 = spre dreapta, 180 / -180 = spre stanga
+    horiz_diff = min(abs(angle_deg), abs(abs(angle_deg) - 180))
+
+    is_horizontal = horiz_diff < 30  # toleranta de 30 de grade
+
+    return pistol_shape and is_horizontal
+
+
 def detect_hand_motion(frame, hands_ctx, prev_positions):
     """
-    Folosește MediaPipe ca să detecteze mișcarea degetului arătător
-    pe partea stângă (player left) și dreaptă (player right).
-    Returnează (motion_left, motion_right, prev_positions_actualizat).
+    Foloseste MediaPipe ca sa detecteze:
+    - miscarea degetului aratator pentru player stanga/dreapta
+    - daca mana este in POZITIE DE PISTOL sau nu
+    Returneaza:
+      motion_left, motion_right, pistol_left, pistol_right, prev_positions
     """
     h, w, _ = frame.shape
 
-    # BGR -> RGB pentru MediaPipe
     img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands_ctx.process(img_rgb)
 
     motion_left = 0.0
     motion_right = 0.0
-
+    pistol_left = False
+    pistol_right = False
     seen = {"left": False, "right": False}
 
     if results.multi_hand_landmarks:
         for hand_landmarks in results.multi_hand_landmarks:
-            # desenăm și punctele de mână direct pe frame (debug)
             mp_drawing.draw_landmarks(
                 frame,
                 hand_landmarks,
@@ -54,10 +122,11 @@ def detect_hand_motion(frame, hands_ctx, prev_positions):
             x_px = int(index_tip.x * w)
             y_px = int(index_tip.y * h)
 
-            # stânga / dreapta în funcție de x
+            # stanga / dreapta
             side = "left" if x_px < w // 2 else "right"
             seen[side] = True
 
+            # calcul miscare (distanta fata de pozitia anterioara)
             prev = prev_positions.get(side)
             if prev is not None:
                 dx = x_px - prev[0]
@@ -65,24 +134,32 @@ def detect_hand_motion(frame, hands_ctx, prev_positions):
                 dist = math.sqrt(dx * dx + dy * dy)
             else:
                 dist = 0.0
-
             prev_positions[side] = (x_px, y_px)
+
+            # marcaj vizual pe vartu degetului
+            cv2.circle(frame, (x_px, y_px), 8, (0, 255, 0), 2)
 
             if side == "left":
                 motion_left = max(motion_left, dist)
             else:
                 motion_right = max(motion_right, dist)
 
-    # dacă nu am văzut mână pe o parte, resetăm poziția anterioară
+            # verificam POZITIE DE PISTOL pentru aceasta mana
+            pistol = is_pistol_pose(hand_landmarks)
+            if side == "left" and pistol:
+                pistol_left = True
+            if side == "right" and pistol:
+                pistol_right = True
+
     for side in ("left", "right"):
         if not seen[side]:
             prev_positions[side] = None
 
-    return motion_left, motion_right, prev_positions
+    return motion_left, motion_right, pistol_left, pistol_right, prev_positions
 
 
 def frame_to_surface(frame):
-    """Transformă un frame OpenCV (BGR) într-un pygame.Surface redimensionat."""
+    """Transforma un frame OpenCV (BGR) intr-un pygame.Surface redimensionat."""
     frame_resized = cv2.resize(frame, (SCREEN_WIDTH, SCREEN_HEIGHT))
     frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
     surface = pygame.image.frombuffer(
@@ -92,14 +169,13 @@ def frame_to_surface(frame):
 
 
 def run(screen, clock):
-    # >>> FONTURI - MODIFICĂ DIMENSIUNILE AICI <<<
-    # Valorile (64, 28, 24) = mărimea textului. Poți pune de ex. 48, 24, 20.
+    # >>> FONTURI - AICI MODIFICI DIMENSIUNEA TEXTULUI <<<
+    # Daca vrei text mai mic: scade cifrele (ex 48, 24, 20)
     try:
-        font_big = pygame.font.Font("assets/fonts/cowboy.ttf", 36)
-        font_small = pygame.font.Font("assets/fonts/cowboy.ttf", 18)
-        button_font = pygame.font.Font("assets/fonts/cowboy.ttf", 12)
+        font_big = pygame.font.Font("assets/fonts/cowboy.ttf", 64)
+        font_small = pygame.font.Font("assets/fonts/cowboy.ttf", 28)
+        button_font = pygame.font.Font("assets/fonts/cowboy.ttf", 24)
     except Exception:
-        # fallback dacă nu există fontul
         font_big = pygame.font.Font(None, 64)
         font_small = pygame.font.Font(None, 28)
         button_font = pygame.font.Font(None, 24)
@@ -116,9 +192,9 @@ def run(screen, clock):
                     return "menu"
 
             screen.fill(BLACK)
-            text1 = font_big.render("Camera nu este disponibilă", True, WHITE)
+            text1 = font_big.render("Camera nu este disponibila", True, WHITE)
             text2 = font_small.render(
-                "Conectează o cameră și apasă ESC pentru meniu.", True, WHITE
+                "Conecteaza o camera si apasa ESC pentru meniu.", True, WHITE
             )
             screen.blit(
                 text1,
@@ -136,24 +212,28 @@ def run(screen, clock):
             clock.tick(FPS)
         return "menu"
 
-    # stările jocului
     phase = "intro"  # intro / waiting / draw / result / error
     delay = 0.0
     signal_time = 0.0
     draw_time = 0.0
 
-    # praguri de mișcare (pixeli / frame) – le poți ajusta dacă e prea sensibil
-    threshold_motion = 10.0       # după DRAW!
-    threshold_false_start = 10.0  # înainte de DRAW!
+    # praguri in pixeli / frame
+    threshold_motion = 8.0       # dupa DRAW!, miscare minima pentru a trage
+    threshold_false_start = 8.0  # inainte de DRAW!, miscare minima pentru fault
 
     reaction_times = {"left": None, "right": None}
     winner_text = ""
     motion_left = 0.0
     motion_right = 0.0
+    pistol_left = False
+    pistol_right = False
 
     prev_positions = {"left": None, "right": None}
 
-    # buton pe ecran pentru ieșire instant la meniu
+    # toggle analiza mainii
+    analysis_enabled = True
+
+    # buton MENIU
     exit_button = Button(
         rect=(SCREEN_WIDTH - 150, 20, 130, 50),
         text="MENIU",
@@ -189,6 +269,10 @@ def run(screen, clock):
                         cap.release()
                         return "menu"
 
+                    # H porneste / opreste analiza mainii
+                    if event.key == pygame.K_h:
+                        analysis_enabled = not analysis_enabled
+
                     # start joc din intro
                     if phase == "intro" and event.key in (
                         pygame.K_SPACE,
@@ -213,7 +297,7 @@ def run(screen, clock):
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     pos = pygame.mouse.get_pos()
 
-                    # buton MENIU – mereu funcțional
+                    # MENIU
                     if exit_button.is_clicked(pos):
                         cap.release()
                         return "menu"
@@ -231,28 +315,32 @@ def run(screen, clock):
                         winner_text = ""
                         prev_positions = {"left": None, "right": None}
 
-            # ---- DETECȚIE MIȘCARE MÂNĂ CU MEDIAPIPE ----
-            if frame is not None and phase in ("waiting", "draw"):
-                motion_left, motion_right, prev_positions = detect_hand_motion(
-                    frame, hands_ctx, prev_positions
-                )
+            # ---- DETECTIE MISCARE + POZITIE PISTOL ----
+            if frame is not None and phase in ("waiting", "draw") and analysis_enabled:
+                (
+                    motion_left,
+                    motion_right,
+                    pistol_left,
+                    pistol_right,
+                    prev_positions,
+                ) = detect_hand_motion(frame, hands_ctx, prev_positions)
             else:
-                # în intro/result nu ne bazăm pe mișcare
                 motion_left = motion_right = 0.0
+                pistol_left = pistol_right = False
 
-            # ---- LOGICA JOCULUI ----
+            # ---- LOGICA JOC ----
             if phase == "waiting":
-                # fault dacă cineva mișcă înainte de DRAW
-                if motion_left > threshold_false_start:
+                # fault doar daca este si miscare si POZITIE PISTOL
+                if analysis_enabled and pistol_left and motion_left > threshold_false_start:
                     winner_text = (
-                        "Player stânga a mișcat prea devreme!\n"
-                        "Câștigă player dreapta."
+                        "Player stanga a miscat prea devreme.\n"
+                        "Castiga player dreapta."
                     )
                     phase = "result"
-                elif motion_right > threshold_false_start:
+                elif analysis_enabled and pistol_right and motion_right > threshold_false_start:
                     winner_text = (
-                        "Player dreapta a mișcat prea devreme!\n"
-                        "Câștigă player stânga."
+                        "Player dreapta a miscat prea devreme.\n"
+                        "Castiga player stanga."
                     )
                     phase = "result"
                 elif now >= signal_time:
@@ -260,9 +348,21 @@ def run(screen, clock):
                     phase = "draw"
 
             elif phase == "draw":
-                if motion_left > threshold_motion and reaction_times["left"] is None:
+                # trage doar daca este POZITIE PISTOL + miscare suficienta
+                if (
+                    analysis_enabled
+                    and pistol_left
+                    and motion_left > threshold_motion
+                    and reaction_times["left"] is None
+                ):
                     reaction_times["left"] = now - draw_time
-                if motion_right > threshold_motion and reaction_times["right"] is None:
+
+                if (
+                    analysis_enabled
+                    and pistol_right
+                    and motion_right > threshold_motion
+                    and reaction_times["right"] is None
+                ):
                     reaction_times["right"] = now - draw_time
 
                 if reaction_times["left"] is not None or reaction_times["right"] is not None:
@@ -271,26 +371,26 @@ def run(screen, clock):
 
                     if lt is not None and (rt is None or lt < rt):
                         winner_text = (
-                            f"Player stânga a tras primul!\nTimp: {lt:.3f} s"
+                            f"Player stanga a tras primul.\nTimp: {lt:.3f} s"
                         )
                     elif rt is not None and (lt is None or rt < lt):
                         winner_text = (
-                            f"Player dreapta a tras primul!\nTimp: {rt:.3f} s"
+                            f"Player dreapta a tras primul.\nTimp: {rt:.3f} s"
                         )
                     else:
-                        winner_text = "Egalitate!\nAți tras aproape în același timp."
+                        winner_text = "Egalitate.\nAti tras aproape in acelasi timp."
 
                     phase = "result"
 
             # ---- DESENARE ----
             screen.fill(BLACK)
 
-            # 1) camera ca fundal
+            # 1) camera
             if frame is not None:
                 cam_surface = frame_to_surface(frame)
                 screen.blit(cam_surface, (0, 0))
 
-            # 2) bulele de mișcare
+            # 2) bule de miscare
             def draw_motion_bubbles(scr, ml, mr, threshold):
                 factor = 1.0 / max(threshold, 1.0)
                 norm_left = min(ml * factor, 1.5)
@@ -308,9 +408,7 @@ def run(screen, clock):
                 color_right = RED if mr >= threshold else GREEN
 
                 pygame.draw.circle(scr, color_left, (cx_left, cy), radius_left, width=4)
-                pygame.draw.circle(
-                    scr, color_right, (cx_right, cy), radius_right, width=4
-                )
+                pygame.draw.circle(scr, color_right, (cx_right, cy), radius_right, width=4)
 
                 rect_left = pygame.Rect(0, 0, SCREEN_WIDTH // 2, SCREEN_HEIGHT)
                 rect_right = pygame.Rect(
@@ -321,28 +419,27 @@ def run(screen, clock):
 
             draw_motion_bubbles(screen, motion_left, motion_right, threshold_motion)
 
-            # >>> PANOU NEGRU - DIMENSIUNE ȘI POZIȚIE AICI <<<
-            # Dacă vrei panoul mai lat / îngust sau mai sus / jos, modifici cifrele:
-            panel_width = int(SCREEN_WIDTH * 0.8)  # lățime panou (procent din ecran)
-            panel_height = 140                     # înălțimea panoului
-            panel_y = 35                           # cât de sus/jos este panoul
+            # >>> PANOU NEGRU - DIMENSIUNE SI POZITIE <<<
+            panel_width = int(SCREEN_WIDTH * 0.8)
+            panel_height = 140
+            panel_y = 35  # mai mare = panoul coboara
 
             panel_surface = pygame.Surface((panel_width, panel_height))
-            panel_surface.set_alpha(180)           # transparența (0-255)
+            panel_surface.set_alpha(180)  # 0 transparent, 255 opac
             panel_surface.fill((0, 0, 0))
             panel_rect = panel_surface.get_rect(
                 center=(SCREEN_WIDTH // 2, panel_y + panel_height // 2)
             )
             screen.blit(panel_surface, panel_rect)
 
-            # text în funcție de fază
+            # text in functie de faza
             if phase == "intro":
                 title = font_big.render("Cowboy Duel", True, WHITE)
                 line1 = font_small.render(
-                    "Player stânga vs. player dreapta", True, WHITE
+                    "Player stanga vs player dreapta", True, WHITE
                 )
                 line2 = font_small.render(
-                    "Stați în fața camerei: unul în stânga, unul în dreapta.",
+                    "Stati in fata camerei: unul in stanga, unul in dreapta.",
                     True,
                     WHITE,
                 )
@@ -357,37 +454,29 @@ def run(screen, clock):
                     y += 30
 
             elif phase == "waiting":
-                txt = font_big.render("Nu mișcați...", True, WHITE)
-                sub = font_small.render("Așteptați semnalul 'DRAW!'", True, WHITE)
+                txt = font_big.render("Nu miscati...", True, WHITE)
+                sub = font_small.render("Asteptati semnalul DRAW.", True, WHITE)
                 screen.blit(
                     txt,
-                    txt.get_rect(
-                        center=(SCREEN_WIDTH // 2, panel_rect.top + 45)
-                    ),
+                    txt.get_rect(center=(SCREEN_WIDTH // 2, panel_rect.top + 45)),
                 )
                 screen.blit(
                     sub,
-                    sub.get_rect(
-                        center=(SCREEN_WIDTH // 2, panel_rect.top + 90)
-                    ),
+                    sub.get_rect(center=(SCREEN_WIDTH // 2, panel_rect.top + 90)),
                 )
 
             elif phase == "draw":
                 txt = font_big.render("DRAW!", True, RED)
                 sub = font_small.render(
-                    "Mișcă mâna cât mai repede!", True, WHITE
+                    "Misca mana in pozitie de pistol.", True, WHITE
                 )
                 screen.blit(
                     txt,
-                    txt.get_rect(
-                        center=(SCREEN_WIDTH // 2, panel_rect.top + 45)
-                    ),
+                    txt.get_rect(center=(SCREEN_WIDTH // 2, panel_rect.top + 45)),
                 )
                 screen.blit(
                     sub,
-                    sub.get_rect(
-                        center=(SCREEN_WIDTH // 2, panel_rect.top + 90)
-                    ),
+                    sub.get_rect(center=(SCREEN_WIDTH // 2, panel_rect.top + 90)),
                 )
 
             elif phase in ("result", "error"):
@@ -400,22 +489,21 @@ def run(screen, clock):
                     y += 35
 
                 hint = font_small.render(
-                    "SPACE / click = rejoc, ESC / MENIU = ieșire", True, WHITE
+                    "SPACE / click = rejoc, ESC / MENIU = iesire", True, WHITE
                 )
                 screen.blit(
                     hint,
-                    hint.get_rect(
-                        center=(SCREEN_WIDTH // 2, panel_rect.bottom - 20)
-                    ),
+                    hint.get_rect(center=(SCREEN_WIDTH // 2, panel_rect.bottom - 20)),
                 )
 
-            # mic HUD de debug
-            hud = font_small.render(
-                f"Motion L: {motion_left:.1f}  R: {motion_right:.1f}",
+            # mic HUD pentru analiza mainii
+            status = "ON" if analysis_enabled else "OFF"
+            analysis_txt = font_small.render(
+                f"Analiza maini: {status}  (H = toggle)",
                 True,
                 WHITE,
             )
-            screen.blit(hud, (10, SCREEN_HEIGHT - 35))
+            screen.blit(analysis_txt, (10, SCREEN_HEIGHT - 35))
 
             # buton MENIU
             exit_button.draw(screen)
