@@ -37,6 +37,11 @@ while True:
                 landmark_drawing_spec=None,
                 connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style()
             )
+            face = results.multi_face_landmarks[0]
+            left_x = face.landmark[61].x
+            right_x = face.landmark[296].x
+            print("Dist zambet: " + str(right_x-left_x))
+
 
     cv2.imshow('Face Mesh', frame)
 
