@@ -2,8 +2,6 @@ import pygame
 import sys
 import math
 
-math.degr2rad
-
 pygame.init()
 WIDTH, HEIGHT = 800, 480
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -15,6 +13,15 @@ BROWN = (139, 69, 19)
 
 clock = pygame.time.Clock()
 
+angle_degrees = -90
+angle_radians = math.radians(angle_degrees)
+
+start_x = 0
+start_y = 480
+
+end_x = start_x + (150 * math.cos(angle_radians))
+end_y = start_y + (150 * math.sin(angle_radians))
+
 running = True
 while running:
 
@@ -23,8 +30,7 @@ while running:
             running = False
 
     screen.fill(SKY_BLUE)
-    pygame.draw.rect(screen, BROWN, (0, 330, 20, 150))
-
+    pygame.draw.line(screen, BROWN, (start_x, start_y), (end_x, end_y), 30)
 
     pygame.display.flip()
     clock.tick(60)
