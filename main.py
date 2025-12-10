@@ -36,35 +36,34 @@ cap = cv2.VideoCapture(0)
 
 running = True
 while running:
-    while True:
-        success, frame = cap.read()
-        if not success:
-            break
+    success, frame = cap.read()
+    if not success:
+        break
 
-        # 1. Flip the frame so it acts like a mirror
-        frame = cv2.flip(frame, 1)
+    # 1. Flip the frame so it acts like a mirror
+    frame = cv2.flip(frame, 1)
 
-        # 2. Convert the color space from BGR (OpenCV default) to RGB (MediaPipe needs this)
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # 2. Convert the color space from BGR (OpenCV default) to RGB (MediaPipe needs this)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # 3. Process the image to find the face
-        results = face_mesh.process(rgb_frame)
+    # 3. Process the image to find the face
+    results = face_mesh.process(rgb_frame)
 
-        # 4. If we found a face, draw the mesh
-        if results.multi_face_landmarks:
-            for face_landmarks in results.multi_face_landmarks:
-                mp_drawing.draw_landmarks(
-                    image=frame,
-                    landmark_list=face_landmarks,
-                    connections=mp_face_mesh.FACEMESH_TESSELATION,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style()
-                )
-                face = results.multi_face_landmarks[0]
-                left_x = face.landmark[61].x
-                right_x = face.landmark[296].x
-                current_smile_size = right_x - left_x
-                print("Dist zambet: " + str(current_smile_size))
+    # 4. If we found a face, draw the mesh
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            mp_drawing.draw_landmarks(
+                image=frame,
+                landmark_list=face_landmarks,
+                connections=mp_face_mesh.FACEMESH_TESSELATION,
+                landmark_drawing_spec=None,
+                connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style()
+            )
+            face = results.multi_face_landmarks[0]
+            left_x = face.landmark[61].x
+            right_x = face.landmark[296].x
+            current_smile_size = right_x - left_x
+            print("Dist zambet: " + str(current_smile_size))
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -72,10 +71,10 @@ while running:
 
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     camera_feed = pygame.image.frombuffer(rgb_frame.tobytes(), (640, 480), 'RGB')
+    camera_feed = pygame.transform.scale(camera_feed, (800, 600))
 
     screen.fill(SKY_BLUE)
-    screen.blit(camera_feed, (0, 0))
-
+    screen.blit(camera_feed, (0, -80))
     pygame.draw.line(screen, BROWN, (start_x, start_y), (end_x, end_y), 30)
 
     pygame.display.flip()
