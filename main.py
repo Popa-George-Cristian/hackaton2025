@@ -3,6 +3,16 @@ import sys
 import math
 import cv2
 import mediapipe as mp
+from bridge import Bridge
+
+def get_pixel_distance(landmark_list, id1, id2, img_w, img_h):
+    p1 = landmark_list[id1]
+    p2 = landmark_list[id2]
+
+    x1, y1 = p1.x * img_h, p1.y * img_w
+    x2, y2 = p2.x * img_h, p2.y * img_w
+
+    return math.hypot(x2 - x1, y2 - y1)
 
 # Initialize the face mesh solution
 mp_face_mesh = mp.solutions.face_mesh
@@ -21,18 +31,28 @@ SKY_BLUE = (135, 206, 235)
 WHITE = (255, 255, 255)
 BROWN = (139, 69, 19)
 
-neutral_bridge_val = 0.62
-smile_value = 0.68
-deadzone_limit = 0.625
+neutral_val = 0.225
+smile_val = 0.205
 
 clock = pygame.time.Clock()
 cap = cv2.VideoCapture(0)
+
+if not cap.isOpened():
+    print("Cannot open camera 0. Trying index 1...")
+    cap = cv2.VideoCapture(1)
+    if not cap.isOpened():
+        print("CRITICAL ERROR! No camera found!")
+        exit()
+
+
+bridge1 = Bridge(40, 480)
 
 running = True
 while running:
     success, frame = cap.read()
     if not success:
-        break
+        print("Ignoring empty camera frame (or disconnected).")
+        continue
 
     # 1. Flip the frame so it acts like a mirror
     frame = cv2.flip(frame, 1)
@@ -55,25 +75,27 @@ while running:
             )
             face = results.multi_face_landmarks[0]
 
-            left_mouth = face.landmark[61].x
-            right_mouth = face.landmark[296].x
-            mouth_width = right_mouth - left_mouth
+            img_h, img_w, _ = frame.shape
 
-            left_eye = face.landmark[33].x
-            right_eye = face.landmark[263].x
-            eye_width = right_eye - left_eye
+            left_lift  = get_pixel_distance(face.landmark, 61, 133, img_w, img_h)
+            right_lift  = get_pixel_distance(face.landmark, 296, 362, img_w, img_h)
 
-            current_smile_size = mouth_width / eye_width
+            avg_lift = (left_lift + right_lift) / 2.0
 
-            ef_ratio = current_smile_size
-            if ef_ratio < deadzone_limit:
-                ef_ratio = neutral_bridge_val
-            smile_clmpd = max(neutral_bridge_val, min(ef_ratio, smile_value))
-            smile_ratio = (smile_clmpd - neutral_bridge_val) / (smile_value - neutral_bridge_val)
+            nose_len = get_pixel_distance(face.landmark, 168, 1, img_w, img_h)
 
-            
+            current_smile_size = avg_lift / nose_len
 
-            print(f"Ratio zambet: {current_smile_size:.3f}")
+            smooth_spd = 0.2
+            current_smooth_ratio = 0.0
+            current_smooth_ratio += (current_smile_size - current_smooth_ratio) * smooth_spd
+
+
+            ef_ratio = current_smooth_ratio
+            smile_clmpd = max(smile_val, min(ef_ratio, neutral_val))
+            smile_ratio = (neutral_val - smile_clmpd) / (neutral_val - smile_val)
+            print(f"Value: {current_smooth_ratio:.3f} / Target: {smile_val} = Bridge: {int(smile_ratio*100)}%")
+            bridge1.update(smile_ratio)
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -83,18 +105,11 @@ while running:
     camera_feed = pygame.image.frombuffer(rgb_frame.tobytes(), (640, 480), 'RGB')
     camera_feed = pygame.transform.scale(camera_feed, (800, 600))
 
-    angle_degrees = -90 + (smile_ratio * 90)
-    angle_radians = math.radians(angle_degrees)
-
-    start_x = 0
-    start_y = 480
-
-    end_x = start_x + (150 * math.cos(angle_radians))
-    end_y = start_y + (150 * math.sin(angle_radians))
-
+    
+    
     screen.fill(SKY_BLUE)
     screen.blit(camera_feed, (0, -80))
-    pygame.draw.line(screen, BROWN, (start_x, start_y), (end_x, end_y), 30)
+    bridge1.draw(screen)
 
     pygame.display.flip()
     clock.tick(60)
