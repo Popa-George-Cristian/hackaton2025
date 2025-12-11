@@ -21,17 +21,11 @@ SKY_BLUE = (135, 206, 235)
 WHITE = (255, 255, 255)
 BROWN = (139, 69, 19)
 
+neutral_bridge_val = 0.62
+smile_value = 0.68
+deadzone_limit = 0.625
+
 clock = pygame.time.Clock()
-
-angle_degrees = -90
-angle_radians = math.radians(angle_degrees)
-
-start_x = 0
-start_y = 480
-
-end_x = start_x + (150 * math.cos(angle_radians))
-end_y = start_y + (150 * math.sin(angle_radians))
-
 cap = cv2.VideoCapture(0)
 
 running = True
@@ -60,10 +54,26 @@ while running:
                 connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style()
             )
             face = results.multi_face_landmarks[0]
-            left_x = face.landmark[61].x
-            right_x = face.landmark[296].x
-            current_smile_size = right_x - left_x
-            print("Dist zambet: " + str(current_smile_size))
+
+            left_mouth = face.landmark[61].x
+            right_mouth = face.landmark[296].x
+            mouth_width = right_mouth - left_mouth
+
+            left_eye = face.landmark[33].x
+            right_eye = face.landmark[263].x
+            eye_width = right_eye - left_eye
+
+            current_smile_size = mouth_width / eye_width
+
+            ef_ratio = current_smile_size
+            if ef_ratio < deadzone_limit:
+                ef_ratio = neutral_bridge_val
+            smile_clmpd = max(neutral_bridge_val, min(ef_ratio, smile_value))
+            smile_ratio = (smile_clmpd - neutral_bridge_val) / (smile_value - neutral_bridge_val)
+
+            
+
+            print(f"Ratio zambet: {current_smile_size:.3f}")
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -72,6 +82,15 @@ while running:
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     camera_feed = pygame.image.frombuffer(rgb_frame.tobytes(), (640, 480), 'RGB')
     camera_feed = pygame.transform.scale(camera_feed, (800, 600))
+
+    angle_degrees = -90 + (smile_ratio * 90)
+    angle_radians = math.radians(angle_degrees)
+
+    start_x = 0
+    start_y = 480
+
+    end_x = start_x + (150 * math.cos(angle_radians))
+    end_y = start_y + (150 * math.sin(angle_radians))
 
     screen.fill(SKY_BLUE)
     screen.blit(camera_feed, (0, -80))
