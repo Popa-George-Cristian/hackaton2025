@@ -18,16 +18,6 @@ from core.settings import (
 )
 from core.ui import Button
 
-# ---------------------------------
-# CAMERA BACKEND (Picamera2 / OpenCV)
-# ---------------------------------
-try:
-    from picamera2 import Picamera2
-    USE_PICAMERA2 = True
-except ImportError:
-    Picamera2 = None
-    USE_PICAMERA2 = False
-
 mp_hands = mp.solutions.hands
 mp_draw = mp.solutions.drawing_utils
 
@@ -127,6 +117,7 @@ def raw_is_pistol(hl, w, h):
     Pistol simplificat:
       - index = singurul deget clar întins;
       - middle, ring, pinky NU sunt întinse;
+      - nu mai cer vertical / thumb „perfect”.
     """
     lm = hl.landmark
     wrist = lm[mp_hands.HandLandmark.WRIST]
@@ -137,7 +128,7 @@ def raw_is_pistol(hl, w, h):
         pip = lm[pip_id]
         d_tip = dist(wrist, tip, w, h)
         d_pip = dist(wrist, pip, w, h)
-        # trebuie să fie mai drept și mai departe
+        # trebuie să fie mai drept și mult mai departe
         return (ang < max_angle) and (d_tip > d_pip * ratio)
 
     # index
@@ -183,7 +174,7 @@ def raw_is_pistol(hl, w, h):
 def update_pose_state(side, fist_raw, pistol_raw, pose_state):
     """
     Contor de frame-uri consecutive pentru FIST/PISTOL.
-    Nu mai forțăm exclusivitate – le folosim în faze diferite.
+    NU mai forțăm exclusivitate – le folosim în faze diferite.
     """
     if fist_raw:
         pose_state[side]["fist_frames"] += 1
@@ -281,7 +272,7 @@ def frame_to_surface(rgb_frame):
     frame_resized = cv2.resize(
         rgb_frame,
         (SCREEN_WIDTH, SCREEN_HEIGHT),
-        interpolation=cv2.INTER_NEAREST,  # mai ușor pentru RPi
+        interpolation=cv2.INTER_NEAREST,
     )
     return pygame.image.frombuffer(
         frame_resized.tobytes(),
@@ -299,67 +290,19 @@ def run(screen, clock):
     font_small = pygame.font.Font(None, 28)
     button_font = pygame.font.Font(None, 24)
 
-    # ------------ INITIALIZARE CAMERA ------------
-    picam2 = None
-    cap = None
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FPS, 30)
 
-    if USE_PICAMERA2:
-        try:
-            picam2 = Picamera2()
-            config = picam2.create_preview_configuration(
-                main={"format": "RGB888", "size": (640, 480)}
-            )
-            picam2.configure(config)
-            picam2.start()
-        except Exception as e:
-            # dacă nu merge picamera2, cădem pe OpenCV
-            print("Eroare Picamera2:", e)
-            picam2 = None
+    if not cap.isOpened():
+        screen.fill(BLACK)
+        t = font_big.render("Camera indisponibila", True, WHITE)
+        screen.blit(t, t.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)))
+        pygame.display.flip()
+        pygame.time.wait(1500)
+        return "menu"
 
-    if picam2 is None:
-        # fallback: webcam clasic (PC sau Pi cu driver V4L2)
-        cap = cv2.VideoCapture(0)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-
-        if not cap.isOpened():
-            screen.fill(BLACK)
-            t = font_big.render("Camera indisponibila", True, WHITE)
-            screen.blit(t, t.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)))
-            pygame.display.flip()
-            pygame.time.wait(1500)
-            return "menu"
-
-    def get_frame_rgb():
-        """
-        Ia un frame RGB fie din Picamera2, fie din OpenCV.
-        Returnează None dacă ceva e în neregulă.
-        """
-        if picam2 is not None:
-            try:
-                frame = picam2.capture_array()  # deja RGB888
-                return frame
-            except Exception as e:
-                print("Eroare la capture_array():", e)
-                return None
-        else:
-            ret, frame_bgr = cap.read()
-            if not ret:
-                return None
-            return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-
-    def close_camera():
-        if picam2 is not None:
-            try:
-                picam2.stop()
-                picam2.close()
-            except Exception:
-                pass
-        if cap is not None:
-            cap.release()
-
-    # state joc
     phase = "intro"
     delay = 0.0
     signal_time = 0.0
@@ -423,29 +366,34 @@ def run(screen, clock):
     ) as hands:
 
         run_loop = True
+        last_rgb_frame = None
 
         while run_loop:
             now = pygame.time.get_ticks() / 1000.0
 
-            frame_rgb = get_frame_rgb()
-            if frame_rgb is None:
+            ret, frame_bgr = cap.read()
+            if not ret:
                 winner_txt = "Camera oprita"
                 phase = "result"
+                frame_rgb = last_rgb_frame
+            else:
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                last_rgb_frame = frame_rgb
 
             debug_info = {
                 "left": {"fist_raw": False, "pistol_raw": False},
                 "right": {"fist_raw": False, "pistol_raw": False},
-            } if debug_overlay and frame_rgb is not None else None
+            } if debug_overlay else None
 
             # evenimente
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
-                    close_camera()
+                    cap.release()
                     return "quit"
 
                 if e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_ESCAPE:
-                        close_camera()
+                        cap.release()
                         return "menu"
 
                     if e.key == pygame.K_h:
@@ -464,7 +412,7 @@ def run(screen, clock):
                 if e.type == pygame.MOUSEBUTTONDOWN:
                     pos = pygame.mouse.get_pos()
                     if exit_btn.is_clicked(pos):
-                        close_camera()
+                        cap.release()
                         return "menu"
 
                     if instructions_btn.is_clicked(pos):
@@ -478,11 +426,7 @@ def run(screen, clock):
                         winner_txt = ""
 
             # ANALIZĂ MÂINI
-            if (
-                frame_rgb is not None
-                and phase in ("waiting", "draw")
-                and analysis
-            ):
+            if frame_rgb is not None and phase in ("waiting", "draw") and analysis:
                 (
                     motion_L,
                     motion_R,
@@ -516,7 +460,7 @@ def run(screen, clock):
                         phase = "draw"
 
             elif phase == "draw":
-                # în DRAW contează doar pistol + mișcare
+                # !!! aici NU mai cerem si pumn in acelasi timp.
                 if pistol_L and motion_L > threshold_motion and reaction["left"] is None:
                     reaction["left"] = now - draw_time
 
@@ -614,5 +558,5 @@ def run(screen, clock):
             pygame.display.flip()
             clock.tick(FPS)
 
-    close_camera()
+    cap.release()
     return "menu"
