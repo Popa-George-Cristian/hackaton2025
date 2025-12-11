@@ -131,7 +131,8 @@ except FileNotFoundError:
 
 pygame.font.init()
 
-cowboy_font = pygame.font.Font()
+small_font = pygame.font.Font(font_path, 40)
+big_font = pygame.font.Font(font_path, 60)
 
 pygame.display.set_caption("Cowboy Cosplay")
 
@@ -171,13 +172,6 @@ while running:
     # 4. If we found a face, draw the mesh
     if results.multi_face_landmarks:
         for face_landmarks in results.multi_face_landmarks:
-            mp_drawing.draw_landmarks(
-                image=frame,
-                landmark_list=face_landmarks,
-                connections=mp_face_mesh.FACEMESH_TESSELATION,
-                landmark_drawing_spec=None,
-                connection_drawing_spec=mp_drawing_styles.get_default_face_mesh_tesselation_style()
-            )
             face = results.multi_face_landmarks[0]
 
             img_h, img_w, _ = frame.shape
@@ -212,7 +206,32 @@ while running:
     camera_feed = pygame.transform.scale(camera_feed, (800, 600))
 
     screen.blit(camera_feed, (0, 0))
+
     draw_cowboy_filter(screen, face.landmark, smile_ratio, 800, 600, cowboy_hat, cowboy_bandana)
+
+    if smile_ratio > 0.5:
+        msj = "YEEHAA"
+        text_color = (255, 215, 0)
+        txt_x = 280
+        txt_y = 20
+        rez_text = big_font.render(msj, True, text_color)
+        shadow = big_font.render(msj, True, (0, 0, 0))
+        screen.blit(shadow, (txt_x + 2, txt_y + 2))
+        screen.blit(rez_text, (txt_x, txt_y))
+    else:
+        msj = "Zambeste ca sa devii un cowboy"
+        text_color = (255, 255, 255)
+        txt_x = 40
+        txt_y = 20
+        instr_text = small_font.render(msj, True, text_color)
+        shadow = small_font.render(msj, True, (0, 0, 0))
+        screen.blit(shadow, (txt_x + 2, txt_y + 2))
+        screen.blit(instr_text, (txt_x, txt_y))
+
+    
+
+    
+
     pygame.display.flip()
     clock.tick(60)
 
