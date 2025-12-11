@@ -14,87 +14,96 @@ def get_pixel_distance(landmark_list, id1, id2, img_w, img_h):
 
     return math.hypot(x2 - x1, y2 - y1)
 
-def draw_cowboy_filter(screen, landmarks, smile_progress, img_w, img_h, hat_img, scarf_img):
-
-    # smile_progress is 0.0 to 1.0. Alpha is 0 to 255.
-    #alpha_value = int(smile_progress * 255)
-    alpha_value = 255
-    
-    # Optimization: If invisible, don't waste time drawing
-    if alpha_value <= 5:
+def draw_cowboy_filter(screen, landmarks, smile_progress, current_video_w, current_video_h, hat_img, scarf_img):
+    if smile_progress > 0.5:
+        # Full Visibility
+        alpha_value = 255 
+    else:
+        # Exit the function immediately (Draw nothing)
         return
 
-    # 2. Calculate Face Scale (How big is the head?)
-    # We use Ear-to-Ear distance (234 to 454) to determine scale
-    left_ear = landmarks[234]
-    right_ear = landmarks[454]
+    # --- CALCULATE HEAD ANGLE (ROLL) ---
+    # Use Outer Eyes (33 and 263) to detect tilt
+    left_eye = landmarks[33]
+    right_eye = landmarks[263]
     
-    # Convert to pixels
-    ear_dist_x = (right_ear.x - left_ear.x) * img_w
-    ear_dist_y = (right_ear.y - left_ear.y) * img_h
-    face_width_px = math.hypot(ear_dist_x, ear_dist_y)
+    # Calculate difference
+    delta_x = (right_eye.x - left_eye.x)
+    delta_y = (right_eye.y - left_eye.y)
+    
+    # Calculate angle in degrees
+    # We multiply by -1 because Pygame rotates counter-clockwise
+    angle_deg = -math.degrees(math.atan2(delta_y, delta_x))
+
+    # --- CALCULATE SCALE (Fixing the "Turning Head" Shrink) ---
+    # If we use ear-to-ear width, the hat shrinks when you look left/right.
+    # Instead, let's use the VERTICAL height of the head (stable-ish during turns)
+    head_top = landmarks[10]
+    head_bottom = landmarks[152]
+    head_height_px = math.hypot(
+        (head_top.x - head_bottom.x) * current_video_w,
+        (head_top.y - head_bottom.y) * current_video_h
+    )
+    
+    # Scale relative to height (Trial and error: Head is roughly 1.5x taller than wide)
+    # Adjust this 1.2 number to make the hat bigger/smaller globally
+    reference_scale = head_height_px * 1.4 
 
     # --- DRAW HAT 🤠 ---
-    # We want the hat to be slightly wider than the face (e.g., 1.5x)
-    hat_scale_factor = 1.8 
-    target_hat_width = int(face_width_px * hat_scale_factor)
-    
-    # Calculate height while keeping aspect ratio
-    original_w, original_h = hat_img.get_size()
-    ratio = target_hat_width / original_w
-    target_hat_height = int(original_h * ratio)
-    
-    # Resize (Scale)
-    # Note: pygame.transform.scale is heavy, but fine for 1 face
-    current_hat = pygame.transform.scale(hat_img, (target_hat_width, target_hat_height))
-    
-    # Apply Alpha (Transparency)
-    current_hat.set_alpha(alpha_value)
+    # 1. Scale
+    h_ratio = reference_scale / hat_img.get_width()
+    target_h_w = int(hat_img.get_width() * h_ratio)
+    target_h_h = int(hat_img.get_height() * h_ratio)
+    scaled_hat = pygame.transform.scale(hat_img, (target_h_w, target_h_h))
+    scaled_hat.set_alpha(alpha_value)
 
-    # Position: Top of Head (ID 10)
-    top_head = landmarks[10]
-
-    head_x = int(top_head.x * img_w)
-    head_y = int(top_head.y * img_h)
-
-    # Center the hat: subtract half width. Move up: subtract full height + offset
-    hat_pos_x = head_x - (target_hat_width // 2)
-    hat_pos_y = head_y - target_hat_height + int(target_hat_height * 0.3) # 0.3 offset to fit snug
+    # 2. Rotate with Dampening
+    # 1.0 = Locked to head (Sticker)
+    # 0.8 = Slight weight (Best for hats)
+    # 0.5 = Very loose (Might look like it's falling off)
+    hat_angle = angle_deg * 0.9  
     
-    screen.blit(current_hat, (hat_pos_x, hat_pos_y))
+    rotated_hat = pygame.transform.rotate(scaled_hat, hat_angle)
+
+    # 3. Position (Forehead ID 10)
+    forehead = landmarks[10]
+    anchor_x = int(forehead.x * current_video_w)
+    anchor_y = int(forehead.y * current_video_h)
+
+    hat_rect = rotated_hat.get_rect(center=(anchor_x, anchor_y))
+    
+    # Apply Offset
+    hat_rect.y -= int(target_h_h * 0.3) 
+
+    screen.blit(rotated_hat, hat_rect)
 
     # --- DRAW SCARF 🧣 ---
-    # Scarf width = slightly wider than face
-    scarf_scale_factor = 2
-    target_scarf_width = int(face_width_px * scarf_scale_factor)
-    
-    s_orig_w, s_orig_h = scarf_img.get_size()
-    s_ratio = target_scarf_width / s_orig_w
-    target_scarf_height = int(s_orig_h * s_ratio)
-    
-    current_scarf = pygame.transform.scale(scarf_img, (target_scarf_width, target_scarf_height))
-    current_scarf.set_alpha(alpha_value)
+    # 1. Scale
+    s_ratio = (reference_scale * 1.3) / scarf_img.get_width()
+    target_s_w = int(scarf_img.get_width() * s_ratio)
+    target_s_h = int(scarf_img.get_height() * s_ratio)
+    scaled_scarf = pygame.transform.scale(scarf_img, (target_s_w, target_s_h))
+    scaled_scarf.set_alpha(alpha_value)
 
-    # NEW ANCHOR: Center of Mouth (ID 164)
-    mouth_center = landmarks[152]
+    # 2. Rotate (THE FIX IS HERE)
+    # The neck moves less than the eyes, so we reduce the angle.
+    # 0.5 means it rotates only half as much as the head.
+    scarf_angle = angle_deg * 0.6 
     
-    # Calculate Pixel Position (Remember to add offsets if you use them!)
-    mouth_x = int(mouth_center.x * img_w)
-    mouth_y = int(mouth_center.y * img_h)
-    
-    # Center the scarf horizontally
-    scarf_pos_x = mouth_x - (target_scarf_width // 2)
-    
-    # Position Vertically:
-    # Since the anchor is now your MOUTH, we want the center of the scarf 
-    # to sit right on this point.
-    scarf_pos_y = mouth_y - (target_scarf_height // 4)
-    
-    # OPTIONAL NUDGE:
-    # If it's too high (blocking nose), add pixels (+ 20)
-    # If it's too low (showing lips), subtract pixels (- 20)
+    rotated_scarf = pygame.transform.rotate(scaled_scarf, scarf_angle)
 
-    screen.blit(current_scarf, (scarf_pos_x, scarf_pos_y))
+    # 3. Position (Chin ID 152)
+    chin = landmarks[152]
+    chin_x = int(chin.x * current_video_w)
+    chin_y = int(chin.y * current_video_h)
+    
+    scarf_rect = rotated_scarf.get_rect(center=(chin_x, chin_y))
+    
+    # Offset adjustment
+    # Since it rotates less, you might need to nudge it up slightly more
+    scarf_rect.y += int(target_s_h * 0.2) 
+
+    screen.blit(rotated_scarf, scarf_rect)
 
 # Initialize the face mesh solution
 mp_face_mesh = mp.solutions.face_mesh
@@ -106,13 +115,12 @@ mp_drawing_styles = mp.solutions.drawing_styles
 
 pygame.init()
 
-
-
 WIDTH, HEIGHT = 800, 480
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 
 hat_path = os.path.join("assets", "hat.png")
 bandana_path = os.path.join("assets", "bandana.png")
+font_path = os.path.join("assets", "cowboy.ttf")
 
 try:
     cowboy_hat = pygame.image.load(hat_path).convert_alpha()
@@ -120,6 +128,10 @@ try:
 except FileNotFoundError:
     print("Nu s-au gasit imaginile.")
     exit()
+
+pygame.font.init()
+
+cowboy_font = pygame.font.Font()
 
 pygame.display.set_caption("Cowboy Cosplay")
 
